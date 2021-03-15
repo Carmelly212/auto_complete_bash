@@ -1,7 +1,7 @@
 # auto_complete_bash
 
-. auto_completion.sh # to source the script
+type: <b>source auto_completion.sh</b>    ---> # to source the script
 
-type: ./project <tab><tab>
+type: <b>./project</b> (then tab X2 )
 
 if you choose git or tree you will have additional options to auto-compelte
