@@ -14,7 +14,8 @@ _main ()
     local prev="${COMP_WORDS[COMP_CWORD-1]}";
     local first="${COMP_WORDS[COMP_CWORD-2]}";
     # main command
-    if [ "$COMP_CWORD" -eq 1 ]; then
+    COMPREPLY=($(compgen -W "complete" -- "$word"));
+    if [ "$COMP_CWORD" -eq 2 ]; then
         COMPREPLY=($(compgen -W "${proj_commands}" -- "$word"));
     else
 
