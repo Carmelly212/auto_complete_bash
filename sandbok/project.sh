@@ -70,34 +70,18 @@ if [ "$1" == "complete" ]; then
             git_reset ) echo ${modules} ${def_opts} "--schema" ;;
             git_status ) echo ${modules} ${def_opts} "--schema" ;;
             git_diff ) echo ${modules} ${def_opts} "--schema" ;;
-             
-            module_build ) echo ${modules} ${def_opts} "--serial --schema --gen --target" ;;
-            
-            # case $op in
-            #     cafe) echo "make ninja";;
-            #     # *) ${def_opts} "--serial --schema --gen --target";;
-            # esac ;;
-        
-            module_cmake ) echo "not implemented yet";;
-
+            module_build ) echo ${modules} ${def_opts} "--serial --schema --gen --target make ninja" ;;
+            module_cmake ) echo "not implemented yet" ;;
             tree_gen ) echo ${modules} ;;
-            tree_cmake ) gen="tree_cmake_gen" ; echo "--gen -g";;
+            tree_cmake ) echo "${modules} --manifest --schema --gen make ninja" ;;
             tree_build ) echo "--menifest --schema --target" ;;
-            list_cmake )  echo "--menifest --schema --full";;
-            list_dev )  echo "--menifest --schema --full";;
-            list_all )  echo "--menifest --schema --full";;
+            list_cmake )  echo "--menifest --schema --full" ;;
+            list_dev )  echo "--menifest --schema --full" ;;
+            list_all )  echo "--menifest --schema --full" ;;
             utest_all ) echo "all" ;;
             utest_dev ) echo "dev" ;;
-            
+
         esac
-        case $gen in
-        tree_cmake_gen ) gen_type="ninja"; echo "make ninja";
-        esac
-        case $gen_type in
-        ninja ) echo ${modules};;
-        esac
-        
-        
     fi
 fi
 
