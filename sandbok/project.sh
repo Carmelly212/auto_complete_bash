@@ -82,19 +82,12 @@ if [ "$1" == "complete" ]; then
 
             tree_gen ) echo ${modules} ;;
             tree_cmake ) gen="tree_cmake_gen" ; echo "--gen -g";;
-                
-             
-
-
-                
-            # tree_cmake ) tree_cmake_handler  "$@" ;;
-            # tree_build ) tree_build_handler "$@" ;;
-            # tree_install ) tree_install_handler "$@" ;;
-            # list_all ) list_all_handler "$@" ;;
-            # list_cmake ) list_cmake_handler  "$@" ;;
-            # list_dev ) list_dev_handler "$@" ;;
-            # utest_all ) utest_all_handler "$@" ;;
-            # utest_dev ) utest_dev_handler "$@" ;;
+            tree_build ) echo "--menifest --schema --target" ;;
+            list_cmake )  echo "--menifest --schema --full";;
+            list_dev )  echo "--menifest --schema --full";;
+            list_all )  echo "--menifest --schema --full";;
+            utest_all ) echo "all" ;;
+            utest_dev ) echo "dev" ;;
             
         esac
         case $gen in
