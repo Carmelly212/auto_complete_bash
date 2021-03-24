@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-modules="mfc llvm cafe"
-def_opts="--manifest --makefile"
+function _auto {
 
-if [ "$1" == "complete" ]; then
+    modules="mfc llvm cafe"
+    def_opts="--manifest --makefile"
     shift 3 # complete ./project.sh
     if [ $# == 0 ]; then
         echo "git module tree list utest"
@@ -83,5 +83,12 @@ if [ "$1" == "complete" ]; then
 
         esac
     fi
-fi
 
+}
+shift 1
+
+if [ "$#" == 0 ]; then
+
+ _auto "$@"
+
+fi

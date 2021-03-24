@@ -1,0 +1,695 @@
+#!/bin/bash
+
+set -e # exit on errors
+
+function usage()
+{
+    ret_code=${1:-0}; shift
+
+    echo -e "$@"
+    echo -e "\nUsage: project [command] [options]"
+    echo -e "commands:"
+    echo -e "git - perform git ops on all modules according to the manifest file"
+    echo -e "\tsync - update all modules according to the manifest file"
+    echo -e "\tpush - push all modules to their git repositories"
+    echo -e "\treset - git reset all modules"
+    echo -e "\tstatus - show status for all modules"
+    echo -e "\tdiff - show diff for all modules"
+    echo -e "module - process modules sequentialy according to the manifest dependencies"
+    echo -e "\tcmake - configure modules"
+    echo -e "\tbuild [-g | --gen {make|ninja}] - build modules"
+    echo -e "list - show modules list and info"
+    echo -e "\tall - all modules"
+    echo -e "\tcmake - configure modules"
+    echo -e "\tdev - development modules"
+    echo -e "tree - generate and build a single-tree CMake project"
+    echo -e "\tgen - create the root CMakeLists.txt for the single-tree project"
+    echo -e "\tcmake [-g | --gen {make|ninja}] - configure CMake using the single-tree project"
+    echo -e "\tbuild - run build phase using the single-tree project"
+    echo -e "\tinstall - run install phase using the single-tree project"
+    echo -e "utest - run utests for the relevant modules in the manifest"
+    echo -e "\tall - all modules marked as CMake"
+    echo -e "\tdev - all development modules"
+
+    exit ${ret_code}
+}
+
+function parse_op(){
+    local cmd=$1;
+    local sub_cmd=$2;
+
+    case "${cmd}" in
+        git )
+            case "${sub_cmd}" in
+                sync ) op="git_sync";                   # git_sync_handler
+                    short_op+="sm"; long_op+=",serial,makefile"
+                    ;;
+                push ) op="git_push";                   # git_push_handler
+                    short_op+="sm"; long_op+=",serial,makefile"
+                    ;;
+                reset ) op="git_reset";                 # git_reset_handler
+                    short_op+="m"; long_op+=",makefile"
+                    ;;
+                status ) op="git_status";               # git_status_handler
+                    short_op+="m"; long_op+=",makefile"
+                    ;;
+                diff ) op="git_diff";                   # git_diff_handler
+                    short_op+="m"; long_op+=",makefile"
+                    ;;
+
+                * ) usage 1 "failed to parse: ${cmd} ${sub_cmd}" ;;
+            esac
+            ;;
+        module )
+            case "${sub_cmd}" in
+                build ) op="module_build";              # module_build_handler
+                    short_op+="smt:g:"; long_op+=",serial,makefile,target:,gen:"
+                    ;;
+                cmake ) op="module_cmake";              # module_cmake_handler
+                    short_op+="sm"; long_op+=",serial,makefile"
+                    ;;
+
+                * ) usage 1 "failed to parse: ${cmd} ${sub_cmd}" ;;
+            esac
+            ;;
+        tree )
+            case "${sub_cmd}" in
+                gen ) op="tree_gen";                    # tree_gen_handler
+                    ;;
+                cmake ) op="tree_cmake";                # tree_cmake_handler
+                    short_op+="g:"; long_op+=",gen:"
+                    ;;
+                build ) op="tree_build";
+                    short_op+="t:"; long_op+=",target:"    # tree_build_handler
+                    ;;
+                install ) op="tree_install"             # tree_install_handler
+                    ;;
+
+                * ) usage 1 "failed to parse: ${cmd} ${sub_cmd}" ;;
+            esac
+            ;;
+        list )
+            case "${sub_cmd}" in
+                all ) op="list_all";
+                    short_op+="f"; long_op+=",full"        # list_all_handler
+                    ;;
+                cmake ) op="list_cmake";
+                    short_op+="f"; long_op+=",full"        # list_cmake_handler
+                    ;;
+                dev )op="list_dev";
+                    short_op+="f"; long_op+=",full"        # list_dev_handler
+                    ;;
+
+                * ) usage 1 "failed to parse: ${cmd} ${sub_cmd}" ;;
+            esac
+            ;;
+        utest )
+            case "${sub_cmd}" in
+                all ) op="utest_all";                   # utest_all_handler
+                    ;;
+                dev ) op="utest_dev";                   # utest_dev_handler
+                    ;;
+
+                * ) usage 1 "failed to parse: ${cmd} ${sub_cmd}" ;;
+            esac
+            ;;
+
+        * ) usage 1 "failed to parse: ${cmd}" ;;
+    esac
+} # parse_op
+
+function rm_and_exit() {
+    [ -e $1 ] && rm $1
+    exit 1
+}
+
+# -------------- handlers ----------------
+
+function utest_handler() {
+    for m in $@; do
+        echo "MODULE ${m}"
+        utest_path="./install/install/${m}/utest"
+        if [ -d ${utest_path} ]; then
+            for t in ${utest_path}/*; do
+                if [ -x ${t} ]; then
+                    echo "RUN ${t}"
+                    ${t} || echo "FAILED ${t}"
+                    echo
+                fi
+            done
+        else
+            echo -e "NO utest\n"
+        fi
+    done
+}
+
+function git_sync_handler() {
+    parallel="-j"
+    while [ $# -gt 0 ]; do
+        case $1 in
+                (-s | --serial) parallel=; ;;
+                (-m | --makefile) showmake="yes"; ;;
+                (-M | --manifest) PROJECT_PY+=" --manifest $2"; shift ;;
+                (-S | --schema) PROJECT_PY+=" --schema $2"; shift ;;
+
+                # default options
+                (--) shift; break ;; # $@ contains remaining pos args
+                (-*) usage 1 "error - unrecognized option $1" ;;
+                (*) break ;;
+        esac
+        shift
+    done
+
+    make_tgt="$@"
+    if [ -n "${make_tgt}" ]; then
+        ${PROJECT_PY} check all ${make_tgt} || exit 1
+    else
+        make_tgt="all"
+    fi
+
+    make_git=$(mktemp "/tmp/make-XXXXX.git")
+    ${PROJECT_PY} git sync > ${make_git}
+    if [ -n "${showmake}" ]; then
+        cat ${make_git}
+        rm_and_exit ${make_git}
+    fi
+
+    if [ $? -eq 0 ]; then
+        make -f ${make_git} ${parallel} ${make_tgt} || rm_and_exit ${make_git}
+        rm ${make_git}
+    else
+        rm_and_exit ${make_git}
+    fi
+} # git_sync_handle
+
+function git_push_handler(){
+    parallel="-j"
+    while [ $# -gt 0 ]; do
+        case $1 in
+                (-s | --serial) parallel=; ;;
+                (-m | --makefile) showmake="yes"; ;;
+                (-M | --manifest) PROJECT_PY+=" --manifest $2"; shift ;;
+                (-S | --schema) PROJECT_PY+=" --schema $2"; shift ;;
+
+                # default options
+                (--) shift; break ;; # $@ contains remaining pos args
+                (-*) usage 1 "error - unrecognized option $1" ;;
+                (*) break ;;
+        esac
+        shift
+    done
+
+    make_tgt="$@"
+    if [ -n "${make_tgt}" ]; then
+        ${PROJECT_PY} check all ${make_tgt} || exit 1
+    else
+        make_tgt="all"
+    fi
+
+    make_git=$(mktemp "/tmp/make-XXXXX.git")
+    ${PROJECT_PY} git push > ${make_git}
+    if [ -n "${showmake}" ]; then
+        cat ${make_git}
+        rm_and_exit ${make_git}
+    fi
+
+    if [ $? -eq 0 ]; then
+        make -f ${make_git} ${parallel} ${make_tgt} || rm_and_exit ${make_git}
+        rm ${make_git}
+    else
+        rm_and_exit ${make_git}
+    fi
+
+} # git_push_handle
+
+function git_status_handler(){
+    while [ $# -gt 0 ]; do
+        case $1 in
+                (-m | --makefile) showmake="yes"; ;;
+                (-M | --manifest) PROJECT_PY+=" --manifest $2"; shift ;;
+                (-S | --schema) PROJECT_PY+=" --schema $2"; shift ;;
+
+                # default options
+                (--) shift; break ;; # $@ contains remaining pos args
+                (-*) usage 1 "error - unrecognized option $1" ;;
+                (*) break ;;
+        esac
+        shift
+    done
+
+    make_tgt="$@"
+    if [ -n "${make_tgt}" ]; then
+        ${PROJECT_PY} check all ${make_tgt} || exit 1
+    else
+        make_tgt="all"
+    fi
+
+    make_git=$(mktemp "/tmp/make-XXXXX.git")
+    ${PROJECT_PY} git status > ${make_git} || rm_and_exit ${make_git}
+    if [ -n "${showmake}" ]; then
+        cat ${make_git}
+        rm_and_exit ${make_git}
+    fi
+
+    make -f ${make_git} ${make_tgt} || rm_and_exit ${make_git}
+    rm ${make_git}
+}
+
+function git_reset_handler() {
+    while [ $# -gt 0 ]; do
+        case $1 in
+                (-m | --makefile) showmake="yes"; ;;
+                (-M | --manifest) PROJECT_PY+=" --manifest $2"; shift ;;
+                (-S | --schema) PROJECT_PY+=" --schema $2"; shift ;;
+
+                # default options
+                (--) shift; break ;; # $@ contains remaining pos args
+                (-*) usage 1 "error - unrecognized option $1" ;;
+                (*) break ;;
+        esac
+        shift
+    done
+
+    make_tgt="$@"
+    if [ -n "${make_tgt}" ]; then
+        ${PROJECT_PY} check all ${make_tgt} || exit 1
+    else
+        make_tgt="all"
+    fi
+
+    if [[ "${extra_args}" =~ --hard ]]; then
+        read -p "'reset --hard' specified, changes will be lost! Are you sure? (y|N): " do_reset
+        if [[ ! "${do_reset}" =~ [yY] ]]; then
+            echo "git reset aborted..."
+            exit 0
+        fi
+    fi
+
+    make_git=$(mktemp "/tmp/make-XXXXX.git")
+    ${PROJECT_PY} git reset ${extra_args} > ${make_git} || rm_and_exit ${make_git}
+    if [ -n "${showmake}" ]; then
+        cat ${make_git}
+        rm_and_exit ${make_git}
+    fi
+
+    make -f ${make_git} ${make_tgt} || rm_and_exit ${make_git}
+    rm ${make_git}
+} # git_reset_handler
+
+function git_diff_handler(){
+    while [ $# -gt 0 ]; do
+        case $1 in
+                (-m | --makefile) showmake="yes"; ;;
+                (-M | --manifest) PROJECT_PY+=" --manifest $2"; shift ;;
+                (-S | --schema) PROJECT_PY+=" --schema $2"; shift ;;
+
+                # default options
+                (--) shift; break ;; # $@ contains remaining pos args
+                (-*) usage 1 "error - unrecognized option $1" ;;
+                (*) break ;;
+        esac
+        shift
+    done
+
+    make_tgt="$@"
+    if [ -n "${make_tgt}" ]; then
+        ${PROJECT_PY} check all ${make_tgt} || exit 1
+    else
+        make_tgt="all"
+    fi
+
+    make_git=$(mktemp "/tmp/make-XXXXX.git")
+    ${PROJECT_PY} git diff > ${make_git} || rm_and_exit ${make_git}
+    if [ -n "${showmake}" ]; then
+        cat ${make_git}
+        rm_and_exit ${make_git}
+    fi
+
+    make -f ${make_git} ${make_tgt} || rm_and_exit ${make_git}
+    rm ${make_git}
+} # git_diff_handler
+
+
+function module_build_handler(){
+    parallel="-j"
+    generator=
+    while [ $# -gt 0 ]; do
+        case $1 in
+                (-s | --serial) parallel=; ;;
+                (-m | --makefile) showmake="yes"; ;;
+                (-t | --target) build_target=$2; shift ;;
+                (-g | --gen) generator="-g $2";
+                case $2 in
+                        ( make | ninja ) generator="-g $2"; shift ;;
+                        ( * ) usage 1 "error - unrecognized option ${2}" ;;
+                esac
+                ;;
+                (-M | --manifest) PROJECT_PY+=" --manifest $2"; shift ;;
+                (-S | --schema) PROJECT_PY+=" --schema $2"; shift ;;
+
+                # default options
+                (--) shift; break ;; # $@ contains remaining pos args
+                (-*) usage 1 "error - unrecognized option ${1}" ;;
+                (*) break ;;
+        esac
+        shift
+    done
+
+    if [ -z "${build_target}" ]; then build_target="all"; fi
+
+    make_tgts="$@"
+    if [ -n "${make_tgts}" ]; then
+        ${PROJECT_PY} check cmake ${make_tgts} || rm_and_exit ${make_bld}
+    else
+        make_tgts="all"
+    fi
+
+    make_bld=$(mktemp "/tmp/make-XXXXX.bld")
+    ${PROJECT_PY} module build ${generator} ${build_target} > ${make_bld} || rm_and_exit ${make_bld}
+    if [ -n "${showmake}" ]; then
+        cat ${make_bld}
+        rm_and_exit ${make_bld}
+    fi
+
+    make -f ${make_bld} ${parallel} ${make_tgts} || rm_and_exit ${make_bld}
+    rm ${make_bld}
+} # module_build_handler
+
+function module_cmake_handler(){
+    echo "not implemented yet"
+    exit 1
+} # module_cmake_handler
+
+
+function tree_gen_handler() {
+    [ -e CMakeLists.txt ] && rm CMakeLists.txt
+    ${PROJECT_PY} tree gen | tee CMakeLists.txt || exit 1
+} # tree_gen_handler
+
+function tree_cmake_handler() {
+    generator="Unix Makefiles"
+    while [ $# -gt 0 ]; do
+        case $1 in
+                (-g | --gen)
+                case $2 in
+                    make ) generator="Unix Makefiles"; shift ;;
+                    ninja) generator="Ninja"; shift ;;
+                    * ) usage 1 "error - unrecognized option ${2}" ;;
+                esac
+                ;;
+                (-M | --manifest) PROJECT_PY+=" --manifest $2"; shift ;;
+                (-S | --schema) PROJECT_PY+=" --schema $2"; shift ;;
+
+                # default options
+                (--) shift; break ;; # $@ contains remaining pos args
+                (-*) usage 1 "error - unrecognized option $1" ;;
+                (*) break ;;
+        esac
+        shift
+    done
+
+    cmake -S . -B build -G ${generator} || exit 1
+}  # tree_cmake_handler
+
+function tree_build_handler() {
+    while [ $# -gt 0 ]; do
+        case $1 in
+                (-t | --target) target=$2; shift ;;
+                (-M | --manifest) PROJECT_PY+=" --manifest $2"; shift ;;
+                (-S | --schema) PROJECT_PY+=" --schema $2"; shift ;;
+
+                # default options
+                (--) shift; break ;; # $@ contains remaining pos args
+                (-*) usage 1 "error - unrecognized option $1" ;;
+                (*) break ;;
+        esac
+        shift
+    done
+    if [ $# != 0 ]; then
+        echo "Unrecognized arguments: $@"
+        exit 1
+    fi
+    if [ -z "${target}" ]; then target="all"; fi
+
+    cmake --build build --target ${target} ${extra_args}
+} # tree_build_handler
+
+function tree_install_handler() {
+    cmake --install build ${extra_args}
+} # tree_install_handler
+
+
+function utest_all_handler() {
+    utest_handler $(${PROJECT_PY} list cmake)
+} # utest_all_handler
+
+function utest_dev_handler() {
+    utest_handler $(${PROJECT_PY} list develop)
+} # utest_dev_handler
+
+
+function list_cmake_handler(){
+    full_mode=
+    while [ $# -gt 0 ]; do
+        case $1 in
+                (-f | --full) full_mode="--full"; shift ;;
+                (-M | --manifest) PROJECT_PY+=" --manifest $2"; shift ;;
+                (-S | --schema) PROJECT_PY+=" --schema $2"; shift ;;
+
+                # default options
+                (--) shift; break ;; # $@ contains remaining pos args
+                (-*) usage 1 "error - unrecognized option $1" ;;
+                (*) break ;;
+        esac
+        shift
+    done
+    if [ $# != 0 ]; then
+        echo "Unrecognized arguments: $@"
+        exit 1
+    fi
+
+    ${PROJECT_PY} list cmake ${full_mode}
+} # list_cmake_handler
+
+function list_dev_handler(){
+    full_mode=
+    while [ $# -gt 0 ]; do
+        case $1 in
+                (-f | --full) full_mode="--full"; shift ;;
+                (-M | --manifest) PROJECT_PY+=" --manifest $2"; shift ;;
+                (-S | --schema) PROJECT_PY+=" --schema $2"; shift ;;
+
+                # default options
+                (--) shift; break ;; # $@ contains remaining pos args
+                (-*) usage 1 "error - unrecognized option $1" ;;
+                (*) break ;;
+        esac
+        shift
+    done
+    if [ $# != 0 ]; then
+        echo "Unrecognized arguments: $@"
+        exit 1
+    fi
+
+    ${PROJECT_PY} list develop ${full_mode}
+} # list_dev_handler
+
+function list_all_handler(){
+    full_mode=
+    while [ $# -gt 0 ]; do
+        case $1 in
+                (-f | --full) full_mode="--full"; shift ;;
+                (-M | --manifest) PROJECT_PY+=" --manifest $2"; shift ;;
+                (-S | --schema) PROJECT_PY+=" --schema $2"; shift ;;
+
+                # default options
+                (--) shift; break ;; # $@ contains remaining pos args
+                (-*) usage 1 "error - unrecognized option $1" ;;
+                (*) break ;;
+        esac
+        shift
+    done
+    if [ $# != 0 ]; then
+        echo "Unrecognized arguments: $@"
+        exit 1
+    fi
+
+    ${PROJECT_PY} list ${full_mode} all
+} # list_all_handler
+
+
+_auto_complete (){
+    #  echo "${1}"
+    modules="mfc llvm cafe"
+    def_opts="--manifest --makefile"
+    shift 2 # complete ./project.sh
+    
+    if [ $# == 0 ]; then
+        echo "git module tree list utest"
+    elif [ $# == 1 ]; then
+        echo $1
+        echo $1
+        echo $1
+        echo $1
+        echo $1
+        echo $1
+        # case $1 in
+        #     git) echo "sync push reset status diff" ;;
+        #     module) echo "build cmake" ;;
+        #     tree) echo "gen cmake build install" ;;
+        #     list) echo "all cmake dev" ;;
+        #     utest) echo "all dev" ;;
+        #     *) echo "git module tree list utest" ;;
+        # esac
+    
+    fi
+
+}
+######################### Start #################################
+
+if [ $1 = "complete" ]; then
+    modules="mfc llvm cafe"
+    def_opts="--manifest --makefile"
+    shift 3 # complete ./project
+    if [ $# == 0 ]; then
+        # exit 0
+        echo "git module tree list utest" ###> /dev/null 2>&1
+    elif [ $# == 1 ]; then
+        case $1 in
+            git) echo "sync push reset status diff" ;;
+            module) echo "build cmake" ;;
+            tree) echo "gen cmake build install" ;;
+            list) echo "all cmake dev" ;;
+            utest) echo "all dev" ;;
+            *) echo "git module tree list utest" ;;
+        esac
+        
+    else
+        case $1 in
+            git)
+                case $2 in
+                    sync) op="git_sync" ;;
+                    push) op="git_push" ;;
+                    reset) op="git_reset" ;;
+                    status) op="git_status" ;;
+                    diff) op="git_diff" ;;
+                    *) echo "sync push reset status diff" ;;
+                esac
+                ;;
+            module)
+                case $2 in
+                    build) op="module_build" ;;
+                    cmake) op="module_cmake" ;;
+                    *) echo "build cmake" ;;
+                esac
+                ;;
+            tree)
+                case $2 in
+                    gen) op="tree_gen" ;;
+                    cmake) op="tree_cmake" ;;
+                    build) op="tree_build" ;;
+                    install) op="tree_install" ;;
+                    *) echo "gen cmake build install" ;;
+                esac
+                ;;
+            list)
+                case $2 in
+                    all) op="list_all" ;;
+                    cmake) op="list_cmake" ;;
+                    dev) op="list_dev" ;;
+                    *) echo "all cmake dev" ;;
+                esac
+                ;;
+            *) exit 0 ;;
+            utest)
+                case $2 in
+                    all) op="utest_all" ;;
+                    dev) op="utest_dev" ;;
+                    *) echo "all dev" ;;
+                esac
+                ;;
+            *) exit 0 ;;
+        esac
+
+        case "$op" in
+            git_sync) echo ${modules} ${def_opts} "--serial --schema" ;;
+            git_push) echo ${modules} ${def_opts} "--serial --schema" ;;
+            git_reset ) echo ${modules} ${def_opts} "--schema" ;;
+            git_status ) echo ${modules} ${def_opts} "--schema" ;;
+            git_diff ) echo ${modules} ${def_opts} "--schema" ;;
+            module_build ) echo ${modules} ${def_opts} "--serial --schema --gen --target make ninja" ;;
+            module_cmake ) echo "not implemented yet" ;;
+            tree_gen ) echo ${modules} ;;
+            tree_cmake ) echo "${modules} --manifest --schema --gen make ninja" ;;
+            tree_build ) echo "--menifest --schema --target" ;;
+            list_cmake )  echo "--menifest --schema --full" ;;
+            list_dev )  echo "--menifest --schema --full" ;;
+            list_all )  echo "--menifest --schema --full" ;;
+            utest_all ) echo "all" ;;
+            utest_dev ) echo "dev" ;;
+
+        esac
+    fi
+    exit 1
+else
+exit 1
+fi
+# #######################
+shift 1
+if [ $# -lt 2 ]; then
+    usage 1 "not enough arguments"
+fi
+cmd=$1;
+sub_cmd=$2;
+shift 2
+
+SCRIPT_PATH=$(readlink -e $0)
+SCRIPT_DIR=$(dirname ${SCRIPT_PATH})
+PROJECT_PY="python3 ${SCRIPT_DIR}/project.py -d ${SCRIPT_DIR}"
+
+# global vars
+short_op="M:S:"
+long_op="manifest:,schema:"
+extra_args=
+op=
+
+parse_op ${cmd} ${sub_cmd}
+
+# find custom parameters, passed after --
+args="$@"
+normal_args="${args%%-- *}" # all args until --
+if [[ "${normal_args}" != "${args}" ]]; then
+    extra_args="${args##*-- }" # all args after --
+fi
+
+if [ -n "${short_op}" ]; then
+    options=$(getopt --options ${short_op} --long ${long_op} -- ${normal_args})
+    if [ $? -ne 0 ]; then
+        usage 1 "failed to parse: ${normal_args} for ${cmd} ${sub_cmd}"
+    fi
+else
+    options="${normal_args}"
+fi
+
+eval set -- ${options} # set new $@
+
+case $op in
+    git_sync ) git_sync_handler "$@" ;;
+    git_push ) git_push_handler "$@" ;;
+    git_reset ) git_reset_handler "$@" ;;
+    git_status ) git_status_handler "$@" ;;
+    git_diff ) git_diff_handler "$@" ;;
+    module_build ) module_build_handler "$@" ;;
+    module_cmake ) module_cmake_handler "$@" ;;
+    tree_gen ) tree_gen_handler "$@" ;;
+    tree_cmake ) tree_cmake_handler  "$@" ;;
+    tree_build ) tree_build_handler "$@" ;;
+    tree_install ) tree_install_handler "$@" ;;
+    list_all ) list_all_handler "$@" ;;
+    list_cmake ) list_cmake_handler  "$@" ;;
+    list_dev ) list_dev_handler "$@" ;;
+    utest_all ) utest_all_handler "$@" ;;
+    utest_dev ) utest_dev_handler "$@" ;;
+
+    * ) usage 1 "unimplemented: ${op}" ;;
+esac
