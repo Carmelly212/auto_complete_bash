@@ -1,0 +1,102 @@
+#!/bin/bash
+def_opts=("--serial" "--makefile" "--gen" "--target")
+function _disclude(){
+    disclude=()
+    
+    for mod in ${def_opts[@]};
+    do
+        # echo ${def_opts}
+        if [[ $@ != $mod ]]; then
+            disclude+=($mod)
+            echo ${disclude}
+        else true
+        fi
+    done
+
+}
+
+
+function handle_complete()
+{
+#    echo "handle_complete: $@"
+    if [[ $# == 0 ]]; then
+        echo "git tree module list autocomp"
+    elif [[ $# == 1 ]]; then
+        case $1 in
+            git) _disclude "$@";;
+            module) echo "build" ;;
+            tree) echo "gen cmake build install" ;;
+            list) echo "all cmake" ;;
+            *) handle_complete  ;;
+        esac
+    else
+        case $1 in
+            git)
+                case $2 in
+                    sync) op="git_sync" ;;
+                    push) op="git_push" ;;
+                    reset) op="git_reset" ;;
+                    status) op="git_status" ;;
+                    diff) op="git_diff" ;;
+                    *) handle_complete git ;;
+                esac
+                ;;
+            module)
+                case $2 in
+                    build) op="module_build" ;;
+                    *) handle_complete module ;;
+                esac
+                ;;
+            tree)
+                case $2 in
+                    gen) op="tree_gen" ;;
+                    cmake) op="tree_cmake" ;;
+                    build) op="tree_build" ;;
+                    install) op="tree_install" ;;
+                    *) handle_complete tree ;;
+                esac
+                ;;
+            list)
+                case $2 in
+                    all) op="list_all" ;;
+                    cmake) op="list_cmake" ;;
+                    *) handle_complete list ;;
+                esac
+                ;;
+
+            *) handle_complete ;;
+        esac
+
+        case "$op" in
+            git_sync) echo "$(${PROJECT_PY} list all)" ${def_opts} "--serial --makefile" ;;
+            git_push) echo "$(${PROJECT_PY} list all)" ${def_opts} "--serial --makefile" ;;
+            git_status) echo "$(${PROJECT_PY} list all)" ${def_opts} "--makefile" ;;
+            git_diff) echo "$(${PROJECT_PY} list all)" ${def_opts} "--makefile" ;;
+            git_reset) echo "$(${PROJECT_PY} list all)" ${def_opts} "--makefile" ;;
+
+            module_build) echo "$(${PROJECT_PY} list all)" ${def_opts} "---serial --makefile --target --generator" ;;
+
+            tree_gen) echo ${def_opts} ;;
+            tree_cmake) echo ${def_opts} "--gen" ;;
+            tree_build) echo ${def_opts} "--target" ;;
+            tree_install) echo ${def_opts} ;;
+
+            list_all ) echo ${def_opts} "--full" ;;
+            list_cmake ) echo ${def_opts} "--full" ;;
+
+            *) ;;
+        esac
+    fi
+    exit 0
+}
+
+######################### Start #################################
+
+cmd=$1;
+
+if [ "${cmd}" == "complete" ]; then
+    shift 2
+    handle_complete "$@"
+fi
+
+

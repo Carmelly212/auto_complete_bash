@@ -1,6 +1,6 @@
 #/usr/bin/env bash
 
-PROJECT_SCRIPT="./project"
+PROJECT_SCRIPT="./func_project"
 
 _main ()
 {
